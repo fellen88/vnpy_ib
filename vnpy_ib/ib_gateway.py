@@ -163,7 +163,19 @@ TICKFIELD_IB2VT: dict[int, str] = {
     12: "last",
     13: "model",
     14: "open_price",
-    86: "open_interest"
+    86: "open_interest",
+    # 延迟行情使用
+    69:"bid_volume_1",
+    66:"bid_price_1",
+    67:"ask_price_1",
+    70:"ask_volume_1",
+    68:"last_price",
+    71:"last_volume",
+    72:"high_price",
+    73:"low_price",
+    74:"volume",
+    75:"pre_close",
+    76:"open_price"
 }
 
 # 账户类型映射
@@ -409,8 +421,8 @@ class IbApi(EWrapper):
     def tickString(self, reqId: TickerId, tickType: TickType, value: str) -> None:
         """tick字符串更新回报"""
         super().tickString(reqId, tickType, value)
-
-        if tickType != TickTypeEnum.LAST_TIMESTAMP:
+        # 增加延迟数据推送
+        if tickType != TickTypeEnum.LAST_TIMESTAMP or tickType != TickTypeEnum.DELAYED_LAST_TIMESTAMP:
             return
 
         tick: TickData = self.ticks.get(reqId, None)
@@ -897,8 +909,9 @@ class IbApi(EWrapper):
         if "-" in req.symbol:
             self.reqid_symbol_map[self.reqid] = req.symbol
 
-        #  订阅tick数据并创建tick对象缓冲区
+        # 订阅tick数据并创建tick对象缓冲区
         self.reqid += 1
+        self.client.reqMarketDataType(3)  # 增加延迟数据 1: live, 2: frozen, 3: delayed, 4: delayed frozen
         self.client.reqMktData(self.reqid, ib_contract, "", False, False, [])
 
         tick: TickData = TickData(

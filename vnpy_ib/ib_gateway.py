@@ -198,6 +198,26 @@ INTERVAL_VT2IB: dict[Interval, str] = {
 LOCAL_TZ = ZoneInfo(get_localzone_name())
 JOIN_SYMBOL: str = "-"
 
+# fellen 自定义合约数据类
+import time
+class MyContractData(ContractData):
+    """自定义合约数据类"""
+    def __init__(self, symbol, exchange, name, product, size, pricetick):
+        super().__init__(self, symbol, exchange, name, product, size, pricetick)
+        self.currency = ""
+        self.time_zone = ""
+        self.trading_hours = ""
+
+# fellen 自定义账户数据类
+class MyAccountData:
+    """自定义账户数据类"""
+    def __init__(self):
+        self.total_cash: float = 0.0
+        self.usd_cash: float = 0.0
+        self.hkd_cash: float = 0.0
+        self.excess_liquidity: float = 0.0
+        self.sma: float = 0.0
+
 
 class IbGateway(BaseGateway):
     """
@@ -272,6 +292,13 @@ class IbGateway(BaseGateway):
 
         self.api.check_connection()
 
+    def update_contract(self, symbol: str, exchange: str) -> MyContractData:
+        """更新自定义合约数据"""
+        return self.api.update_contract_data(symbol, exchange)
+
+    def update_account(self) -> MyAccountData:
+        """更新自定义账户数据"""
+        return self.api.update_account_data()
 
 class IbApi(EWrapper):
     """IB的API接口"""
@@ -310,7 +337,89 @@ class IbApi(EWrapper):
         self.reqid_symbol_map: dict[int, str] = {}
 
         self.client: EClient = EClient(self)
+        # add by fellen
+        self.my_contract_data: MyContractData = None
+        self.contract_reqid: int = 0
+        self.contract_reqid_return: int = 0
+        self.contract_is_not_updated = True
+        self.contract_wait_count = 0
 
+        self.my_account_data: MyAccountData = MyAccountData()
+        self.account_reqid: int = 0
+        self.account_reqid_return: int = 0
+        self.account_is_not_updated = True
+        self.account_wait_count = 0
+        # end by fellen
+   
+    # add by fellen 更新自定义合约数据    
+    def update_contract_data(self, conid, exchange) -> MyContractData:
+        """更新自定义合约数据"""
+        self.contract_reqid += 1
+        contract = Contract()
+        contract.conId = conid
+        contract.exchange = exchange
+        self.contract_is_not_updated = True
+        self.client.reqContractDetails(self.contract_reqid, contract)
+        while self.contract_is_not_updated or self.contract_reqid != self.contract_reqid_return:
+            self.contract_wait_count += 1
+            if self.contract_wait_count > 500:
+                self.contract_wait_count = 0
+                print("reqid: ", self.contract_reqid)
+                print("contract_reqid: ", self.contract_reqid_return)
+                print("contract_is_not_updated: ", self.contract_is_not_updated)
+                print("$$$$$$$$$$$$ contract wait too long, return none $$$$$$$$$$$$")
+                return None
+            time.sleep(0.004)
+        self.contract_wait_count = 0
+        self.contract_is_not_updated = True
+        return self.my_contract_data
+    
+    # add by fellen 更新自定义账户数据
+    def update_account_data(self) -> MyAccountData:
+        # 通过TWS查询合约信息
+        self.account_reqid += 1
+        self.account_is_not_updated = True
+        self.client.reqAccountSummary(self.account_reqid, "All", "TotalCashValue, $LEDGER:USD, $LEDGER:HKD, BuyingPower, ExcessLiquidity, SMA")
+        while self.account_is_not_updated or self.account_reqid != self.account_reqid_return:
+            self.account_wait_count += 1
+            if self.account_wait_count > 500:
+                self.account_wait_count = 0
+                print("account_reqid: ", self.account_reqid_return)
+                print( "account_reqid_return: ", self.account_reqid_return)
+                print("$$$$$$$$$$$$ account wait too long, return none $$$$$$$$$$$$")
+                return None
+            time.sleep(0.004)
+        self.account_wait_count = 0
+        self.account_is_not_updated = True
+        return self.my_account_data
+        
+    # end by fellen 账户数据更新回报
+    def accountSummary(self, reqId: int, account: str, tag: str, value: str, currency: str) -> None:
+        """账户数据更新回报"""
+        if tag == "TotalCashValue":
+            self.my_account_data.total_cash = float(value)
+        elif tag == "TotalCashBalance" and currency == "USD":
+            self.my_account_data.usd_cash = float(value)
+        elif tag == "TotalCashBalance" and currency == "HKD":
+            self.my_account_data.hkd_cash = float(value)
+        elif tag == "ExcessLiquidity":
+            self.my_account_data.excess_liquidity = float(value)
+        elif tag == "SMA":
+            self.my_account_data.sma = float(value)
+        else:
+            pass
+        # print("$$$$$$$$$$$$$$$account: ", account)
+        # print("$$$$$$$$$$$$$$$tag: ", tag)
+        # print("$$$$$$$$$$$$$$$value: ", value)
+        # print("$$$$$$$$$$$$$$$currency: ", currency)
+
+    # add by fellen 合约数据更新结束回报
+    def accountSummaryEnd(self, reqId: int) -> None:
+        """账户数据更新结束回报"""
+        self.account_reqid_return = reqId
+        self.account_is_not_updated = False
+        self.client.cancelAccountSummary(self.account_reqid)
+        
     def connectAck(self) -> None:
         """连接成功回报"""
         self.status = True
@@ -687,6 +796,28 @@ class IbApi(EWrapper):
             stop_supported=True,
             gateway_name=self.gateway_name,
         )
+        # add by fellen
+        mycontract: MyContractData = MyContractData(
+            symbol=symbol,
+            exchange=EXCHANGE_IB2VT[ib_contract.exchange],
+            name=contractDetails.longName,
+            product=PRODUCT_IB2VT[ib_contract.secType],
+            size=int(ib_contract.multiplier),
+            pricetick=contractDetails.minTick,
+        )
+        self.my_contract_data = mycontract
+        self.my_contract_data.min_volume = contractDetails.minSize
+        self.my_contract_data.net_position = True
+        self.my_contract_data.history_data = True
+        self.my_contract_data.stop_supported = True
+        self.my_contract_data.gateway_name = self.gateway_name
+        self.my_contract_data.currency = contractDetails.contract.currency
+        self.my_contract_data.time_zone = contractDetails.timeZoneId
+        self.my_contract_data.trading_hours = contractDetails.tradingHours
+
+        self.contract_reqid_return = reqId
+        self.contract_is_not_updated = False
+        # end by fellen
 
         if contract.product == Product.OPTION:
             underlying_symbol: str = str(contractDetails.underConId)

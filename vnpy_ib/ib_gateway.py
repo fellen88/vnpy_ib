@@ -217,6 +217,8 @@ class MyAccountData:
         self.hkd_cash: float = 0.0
         self.excess_liquidity: float = 0.0
         self.sma: float = 0.0
+        self.net_liquidation: float = 0.0
+        self.equity_with_loan: float = 0.0
 
 
 class IbGateway(BaseGateway):
@@ -379,7 +381,7 @@ class IbApi(EWrapper):
         # 通过TWS查询合约信息
         self.account_reqid += 1
         self.account_is_not_updated = True
-        self.client.reqAccountSummary(self.account_reqid, "All", "TotalCashValue, $LEDGER:USD, $LEDGER:HKD, BuyingPower, ExcessLiquidity, SMA")
+        self.client.reqAccountSummary(self.account_reqid, "All", "TotalCashValue, $LEDGER:USD, $LEDGER:HKD, NetLiquidation, EquityWithLoanValue, ExcessLiquidity, SMA")
         while self.account_is_not_updated or self.account_reqid != self.account_reqid_return:
             self.account_wait_count += 1
             if self.account_wait_count > 500:
@@ -406,6 +408,10 @@ class IbApi(EWrapper):
             self.my_account_data.excess_liquidity = float(value)
         elif tag == "SMA":
             self.my_account_data.sma = float(value)
+        elif tag == "EquityWithLoanValue":
+            self.my_account_data.equity_with_loan = float(value)
+        elif tag == "NetLiquidation":
+            self.my_account_data.net_liquidation = float(value)
         else:
             pass
         # print("$$$$$$$$$$$$$$$account: ", account)

@@ -293,14 +293,19 @@ class IbGateway(BaseGateway):
         self.count = 0
 
         self.api.check_connection()
-
+    # add by fellen
     def update_contract(self, symbol: str, exchange: str) -> MyContractData:
         """更新自定义合约数据"""
         return self.api.update_contract_data(symbol, exchange)
-
+    
     def update_account(self) -> MyAccountData:
         """更新自定义账户数据"""
         return self.api.update_account_data()
+    
+    def check_order(self, conid: str, exchange: str, direction: str, type: str, volume: float, price: float) -> OrderState:
+        """获取订单状态"""
+        return self.api.check_order(conid, exchange, direction, type, volume, price)
+    # end by fellen
 
 class IbApi(EWrapper):
     """IB的API接口"""
@@ -351,6 +356,14 @@ class IbApi(EWrapper):
         self.account_reqid_return: int = 0
         self.account_is_not_updated = True
         self.account_wait_count = 0
+
+        self.order_state: OrderState = None
+        self.order_state_id: int = 1
+        self.order_state_id_return: int = 0
+        self.order_whatif: bool = False
+        self.order_state_is_not_updated = True
+        self.order_state_wait_count = 0
+        self.client.reqIds(1)
         # end by fellen
    
     # add by fellen 更新自定义合约数据    
@@ -395,7 +408,7 @@ class IbApi(EWrapper):
         self.account_is_not_updated = True
         return self.my_account_data
         
-    # end by fellen 账户数据更新回报
+    # add by fellen 账户数据更新回报
     def accountSummary(self, reqId: int, account: str, tag: str, value: str, currency: str) -> None:
         """账户数据更新回报"""
         if tag == "TotalCashValue":
@@ -426,6 +439,42 @@ class IbApi(EWrapper):
         self.account_is_not_updated = False
         self.client.cancelAccountSummary(self.account_reqid)
         
+    # add by fellen
+    def check_order(self, conid: str, exchange: str, direction: str, type: str, volume: float, price: float) -> OrderState:
+        """获取订单状态"""
+
+        if self.order_state_id % 2 == 0:
+            self.order_state_id += 1
+        self.order_state_is_not_updated = True
+
+        ib_contract: Contract = Contract()
+        ib_contract.exchange = exchange
+        ib_contract.conId = conid
+
+        ib_order: Order = Order()
+        ib_order.orderId = self.order_state_id
+        ib_order.clientId = self.clientid
+        ib_order.action = direction
+        ib_order.orderType = type
+        ib_order.totalQuantity = volume
+        ib_order.account = self.account
+        ib_order.orderRef = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        ib_order.whatIf = True
+        ib_order.lmtPrice = price
+
+        self.client.placeOrder(self.order_state_id, ib_contract, ib_order)
+        while self.order_state_is_not_updated or self.order_state_id != self.order_state_id_return:
+            self.order_state_wait_count += 1
+            if self.order_state_wait_count > 1000:
+                self.order_state_wait_count = 0
+                print("$$$$$$$$$$$$ order state wait too long, return none $$$$$$$$$$$$")
+                return None
+            time.sleep(0.004)
+        self.client.reqIds(1)
+        self.order_state_wait_count = 0
+        self.order_state_is_not_updated = True
+        return self.order_state
+
     def connectAck(self) -> None:
         """连接成功回报"""
         self.status = True
@@ -444,8 +493,11 @@ class IbApi(EWrapper):
         """下一个有效订单号回报"""
         super().nextValidId(orderId)
 
-        if not self.orderid:
-            self.orderid = orderId
+        # modify by fellen
+        self.order_state_id = orderId
+        # if not self.orderid:
+        self.orderid = orderId
+        # end by fellen
 
     def currentTime(self, time: int) -> None:
         """IB当前服务器时间回报"""
@@ -666,6 +718,13 @@ class IbApi(EWrapper):
     ) -> None:
         """新订单回报"""
         super().openOrder(orderId, ib_contract, ib_order, orderState)
+        # add by fellen
+        self.order_state_id_return = orderId
+        self.order_state = orderState
+        self.order_state_is_not_updated = False
+        if orderId % 2 != 0:
+            return
+        # end by fellen
 
         orderid: str = str(orderId)
 
@@ -1078,7 +1137,10 @@ class IbApi(EWrapper):
             self.gateway.write_log("委托失败，合约代码中包含空格")
             return ""
 
-        self.orderid += 1
+        # add by fellen
+        if self.orderid % 2 != 0:
+            self.orderid += 1
+        # end by fellen
 
         ib_contract: Contract = generate_ib_contract(req.symbol, req.exchange)
         if not ib_contract:
